@@ -15,6 +15,25 @@ from .scraper import scrape, save
 from .store import Store
 
 
+class ScrapeSanityError(RuntimeError):
+    pass
+
+
+def guard_scrape(locations, accounts) -> None:
+    """Fail closed if the scrape looks broken. Without this, a website outage or a layout
+    change would make the matcher propose flagging every Bellhaven facility as missing."""
+    bellhaven_active = [a for a in accounts if a.get("parent_name") == config.PARENT_ACCOUNT_NAME
+                        and a.get("status") == "Active" and not a.get("chow_current_account")]
+    floor = max(1, int(config.MIN_SCRAPE_RATIO * len(bellhaven_active)))
+    if len(locations) < floor:
+        raise ScrapeSanityError(
+            f"scraped only {len(locations)} locations but CRM has {len(bellhaven_active)} active Bellhaven "
+            f"facilities (floor {floor}); refusing to generate proposals from a suspect scrape")
+    bad = [l.slug for l in locations if not (l.name and l.street and l.city and l.state and l.zip)]
+    if bad:
+        raise ScrapeSanityError(f"locations with missing name/address fields (layout change?): {bad}")
+
+
 def run(dry_run: bool = False, verbose: bool = True) -> dict:
     today = date.today().isoformat()
     crm = CRM()
@@ -30,6 +49,7 @@ def run(dry_run: bool = False, verbose: bool = True) -> dict:
     if verbose:
         print(f"[crm] {len(accounts)} accounts, {len(contacts)} contacts")
 
+    guard_scrape(locations, accounts)
     proposals, report = build_proposals(locations, accounts, contacts, today)
     if verbose:
         print(f"[match] {report['proposals_by_kind']}")

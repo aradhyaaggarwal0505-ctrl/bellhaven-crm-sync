@@ -18,7 +18,7 @@ bellhaven_sync/
   pipeline.py    scrape -> fetch CRM -> match -> queue   (python run_pipeline.py)
 review_app/app.py  local Flask reviewer UI (approve = apply now, reject = never re-ask)
 .github/workflows/daily-sync.yml, crontab.example   daily schedule
-tests/            unit tests for normalisation, matching, and the SOP branch
+tests/            17 unit tests: normalisation, matching, SOP branch, apply preconditions, queue idempotency
 ```
 
 ## Run it
@@ -103,6 +103,13 @@ that, the matcher only proposes changes for differences that still exist in the 
 and it skips records that are already merged (`Inactive` + `duplicate_of_account`) or
 CHOW'd (`chow_current_account` set). Running the pipeline right after the review produced
 `{'new': 0, ...}` and `[match] {}`.
+
+**Fail-closed guards.** A website outage or layout change would otherwise make the matcher
+propose flagging every Bellhaven facility as missing, so the pipeline aborts before touching
+the queue if the scrape returns fewer than half as many locations as the CRM has Active
+Bellhaven facilities, or if any location is missing name/address fields. At apply time every
+PATCH first re-reads the live account and re-checks the billing lock and the expected parent
+(`tests/test_safety.py` covers both).
 
 ## Schedule
 

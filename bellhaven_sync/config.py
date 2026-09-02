@@ -50,6 +50,10 @@ POSSIBLE_SCORE = 0.40
 
 NOTE_TAG = "[bellhaven-sync]"
 
+# Abort a run if the scrape returns fewer locations than this fraction of the Active
+# Bellhaven facilities already in the CRM (protects against outages / layout changes).
+MIN_SCRAPE_RATIO = 0.5
+
 # macOS system Python links against LibreSSL; the urllib3 warning is noise for this tool.
 import warnings as _w
 _w.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
