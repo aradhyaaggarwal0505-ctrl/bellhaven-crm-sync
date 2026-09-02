@@ -1,0 +1,3 @@
+# Bellhaven -> CRM sync, every day at 06:00 local time. Proposals land in state/proposals.db;
+# a reviewer approves them in the review app (python review_app/app.py).
+0 6 * * * .venv/bin/python run_pipeline.py --quiet >> logs/cron.log 2>&1

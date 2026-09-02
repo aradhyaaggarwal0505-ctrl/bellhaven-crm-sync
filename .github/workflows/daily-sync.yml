@@ -1,0 +1,33 @@
+name: daily-bellhaven-sync
+
+on:
+  schedule:
+    - cron: "0 11 * * *"      # 06:00 US Eastern (11:00 UTC), daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    concurrency: bellhaven-sync   # never two runs writing the queue at once
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Scrape, match, queue proposals
+        env:
+          CRM_TOKEN: ${{ secrets.CRM_TOKEN }}
+        run: python run_pipeline.py --quiet
+      - name: Persist the review queue
+        # The queue (state/proposals.db) is the source of truth for what has already been
+        # decided, so it is committed back. Reviewers pull, review locally, and push.
+        run: |
+          git config user.name "bellhaven-sync-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state/proposals.db
+          git diff --cached --quiet || git commit -m "daily sync: refresh proposal queue"
+          git push
