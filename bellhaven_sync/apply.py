@@ -57,6 +57,22 @@ def apply_actions(crm: CRM, actions: List[Dict]) -> Dict:
                 body["note"] = _append_note(live.get("note", ""), note_add)
             res = crm.update_account(acct_id, body)
             log.append({"op": "patch", "account_id": acct_id, "fields": sorted(body.keys()), "response": res})
+        elif act["op"] == "create_contact":
+            body = {k: (created_id if v == "$created" else v) for k, v in act["body"].items()}
+            if any(v == "$created" for v in act["body"].values()) and not created_id:
+                raise CRMError("create_contact references $created but no account was created")
+            res = crm.create_contact(body)
+            cid = res.get("contact_id") or (res.get("data") or {}).get("contact_id")
+            log.append({"op": "create_contact", "contact_id": cid, "name": body.get("name"), "account_id": body.get("account_id")})
+        elif act["op"] == "patch_contact":
+            live = crm.get_contact(act["contact_id"])
+            pre = act.get("preconditions") or {}
+            if "account_id" in pre and live.get("account_id") != pre["account_id"]:
+                raise PreconditionFailed(f"contact {act['contact_id']} moved since proposal; re-run the pipeline")
+            if "is_active" in pre and bool(live.get("is_active")) != pre["is_active"]:
+                raise PreconditionFailed(f"contact {act['contact_id']} active flag changed since proposal; re-run the pipeline")
+            res = crm.update_contact(act["contact_id"], act["body"])
+            log.append({"op": "patch_contact", "contact_id": act["contact_id"], "fields": sorted(act["body"].keys()), "response": res})
         else:
             raise CRMError(f"unknown op {act['op']}")
     return {"ok": True, "created_account_id": created_id, "log": log}

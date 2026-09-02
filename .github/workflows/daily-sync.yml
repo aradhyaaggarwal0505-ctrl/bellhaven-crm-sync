@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   sync:
@@ -21,7 +22,19 @@ jobs:
       - name: Scrape, match, queue proposals
         env:
           CRM_TOKEN: ${{ secrets.CRM_TOKEN }}
+          NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}   # optional Slack webhook
         run: python run_pipeline.py --quiet
+      - name: Open a review issue when something new was queued
+        # A queue nobody looks at is worth nothing, so every run that finds new work pings a human.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NEW=$(python -c "import json;print(json.load(open('state/last_run.json'))['queue']['new'])")
+          if [ "$NEW" -gt 0 ]; then
+            BODY=$(python -c "import json;d=json.load(open('state/last_run.json'));print('\n'.join('- '+t for t in d['new_titles']))")
+            gh issue create --title "Review $NEW new CRM proposal(s) - $(date -u +%F)" \
+              --body "Run the review app locally (\`python review_app/app.py\`) and decide these:\n\n$BODY"
+          fi
       - name: Persist the review queue
         # The queue (state/proposals.db) is the source of truth for what has already been
         # decided, so it is committed back. Reviewers pull, review locally, and push.

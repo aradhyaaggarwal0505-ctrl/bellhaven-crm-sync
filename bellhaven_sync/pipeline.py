@@ -5,8 +5,11 @@ matcher only proposes changes for differences that still exist in the live CRM.
 """
 import argparse
 import json
+import os
 import sys
 from datetime import date
+
+import requests
 
 from . import config
 from .crm import CRM
@@ -62,12 +65,31 @@ def run(dry_run: bool = False, verbose: bool = True) -> dict:
     store = Store()
     run_id = store.start_run()
     counts = store.upsert_proposals(proposals, run_id)
-    summary = {**report, "queue": counts, "date": today}
+    summary = {**report, "queue": counts, "date": today, "totals": store.counts(),
+               "new_titles": [p.title for p in proposals if store.get(p.fingerprint)["first_seen"] == store.get(p.fingerprint)["last_seen"]]}
     store.finish_run(run_id, summary)
+    (config.STATE_DB.parent / "last_run.json").write_text(json.dumps(summary, indent=1))
+    notify(summary)
     if verbose:
         print(f"[queue] {counts}")
         print(f"[queue] totals by status: {store.counts()}")
     return summary
+
+
+def notify(summary: dict) -> None:
+    """Optional: POST a Slack-compatible message when the run queued something new.
+    Set NOTIFY_WEBHOOK_URL (Slack incoming webhook or any endpoint accepting {"text": ...})."""
+    url = os.environ.get("NOTIFY_WEBHOOK_URL")
+    new = summary.get("queue", {}).get("new", 0)
+    if not url or not new:
+        return
+    pending = summary.get("totals", {}).get("pending", 0)
+    lines = [f"Bellhaven sync {summary['date']}: {new} new proposal(s), {pending} pending review."]
+    lines += [f"• {t}" for t in summary.get("new_titles", [])[:15]]
+    try:
+        requests.post(url, json={"text": "\n".join(lines)}, timeout=10)
+    except Exception as e:  # noqa: BLE001 - notification failure must never fail the run
+        print(f"[notify] failed: {e}", file=sys.stderr)
 
 
 def main(argv=None):

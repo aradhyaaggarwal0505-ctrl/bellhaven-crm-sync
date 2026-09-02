@@ -69,3 +69,12 @@ class CRM:
 
     def update_account(self, account_id: str, body: Dict) -> Dict:
         return self._req("PATCH", f"/accounts/{account_id}", json=body)
+
+    def get_contact(self, contact_id: str) -> Dict:
+        return self._req("GET", f"/contacts/{contact_id}")
+
+    def create_contact(self, body: Dict) -> Dict:
+        return self._req("POST", "/contacts", json=body)
+
+    def update_contact(self, contact_id: str, body: Dict) -> Dict:
+        return self._req("PATCH", f"/contacts/{contact_id}", json=body)

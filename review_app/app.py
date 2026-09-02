@@ -35,6 +35,10 @@ KIND_LABELS = {
     "fix_phone": ("Phone fix", "#6b7280"),
     "reactivate": ("Reactivate", "#1e6e46"),
     "flag_missing": ("Not on website", "#b45309"),
+    "add_contact": ("Add contact", "#1e6e46"),
+    "replace_admin": ("Administrator changed", "#0f766e"),
+    "fix_contact": ("Contact fix", "#0f766e"),
+    "move_contact": ("Move contact", "#b45309"),
 }
 KIND_ORDER = list(KIND_LABELS)
 
@@ -132,10 +136,15 @@ PAGE = r"""
  {% if ev.successor_record %}<div class="kv"><b>Successor record:</b> {{ev.successor_record.name}} <a class="acct" href="{{crm_ui}}/{{ev.successor_record.account_id}}" target="_blank">{{ev.successor_record.account_id}}</a> · {{ev.successor_record.billing_street}} · parent {{ev.successor_record.parent_name}}</div>{% endif %}
  {% if ev.related_records %}<div class="kv"><b>Related but not matching:</b> {% for r in ev.related_records %}{{r.name}} ({{r.billing_street}}, {{r.billing_city}} {{r.billing_state}}; parent {{r.parent_name or 'none'}}; score {{r.score}}){% if not loop.last %}; {% endif %}{% endfor %}</div>{% endif %}
  {% if ev.contacts %}<div class="kv"><b>Contacts on record:</b> {{ev.contacts|join(', ')}}</div>{% endif %}
+ {% if ev.site_administrator %}<div class="kv"><b>Website administrator:</b> {{ev.site_administrator}}</div>{% endif %}
+ {% if ev.retired_record %}<div class="kv"><b>Retired record:</b> {{ev.retired_record.name}} <a class="acct" href="{{crm_ui}}/{{ev.retired_record.account_id}}" target="_blank">{{ev.retired_record.account_id}}</a> · {{ev.retired_record.status}} · dup of {{ev.retired_record.duplicate_of_account}}</div>{% endif %}
+ {% if ev.contact %}<div class="kv"><b>Contact:</b> {{ev.contact.name}} · {{ev.contact.title}} · {{ev.contact.email or 'no email'}} · {{ev.contact.phone or 'no phone'}} · {{'active' if ev.contact.is_active else 'inactive'}} <span class="muted">{{ev.contact.contact_id}}</span></div>{% endif %}
+ {% if ev.crm_contacts is defined %}<table class="cmp" style="width:auto"><tr><th>CRM contacts on {{'survivor' if ev.retired_record else 'account'}}</th><th>title</th><th>email</th><th>active</th></tr>
+  {% for c in ev.crm_contacts %}<tr><td>{{c.name}}</td><td>{{c.title}}</td><td>{{c.email or ''}}</td><td>{{'yes' if c.is_active else 'no'}}</td></tr>{% else %}<tr><td colspan="4" class="muted">none</td></tr>{% endfor %}</table>{% endif %}
  {% if ev.website_check %}<div class="kv">{{ev.website_check}}</div>{% endif %}
  {% if ev.breakdown %}<div class="muted">match score {{ev.score}} · {% for k,v in ev.breakdown.items() %}{{k}}={{v}} {% endfor %}</div>{% endif %}
  <details><summary>API actions that will run on approval</summary><pre>{{p.actions|tojson(indent=1)}}</pre></details>
- {% if p.result %}<div class="result {{'' if p.result.ok else 'err'}}">{% if p.result.ok %}Applied.{% if p.result.created_account_id %} Created account <a class="acct" href="{{crm_ui}}/{{p.result.created_account_id}}" target="_blank">{{p.result.created_account_id}}</a>.{% endif %}{% else %}{{p.result.error}}{% endif %}</div>{% endif %}
+ {% if p.result %}<div class="result {{'' if p.result.ok else 'err'}}">{% if p.result.ok %}Applied.{% if p.result.created_account_id %} Created account <a class="acct" href="{{crm_ui}}/{{p.result.created_account_id}}" target="_blank">{{p.result.created_account_id}}</a>.{% endif %}{% for l in p.result.log %}{% if l.op=='create_contact' %} Created contact {{l.name}} ({{l.contact_id}}).{% endif %}{% endfor %}{% else %}{{p.result.error}}{% endif %}</div>{% endif %}
  {% if p.status in ('pending','failed','stale') %}
  <div class="act">
   <button class="ok" formaction="{{url_for('decide',fp=p.fingerprint,decision='approve')}}" formmethod="post" onclick="return confirm('Apply this change to the CRM now?')">{{'Retry' if p.status=='failed' else 'Approve & apply'}}</button>

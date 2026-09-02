@@ -19,6 +19,11 @@ Proposal kinds
   chow_outbound      Bellhaven account not on the website, and another parent now has a
                      record at the same address -> the facility was sold; link it
   flag_missing       Bellhaven account not on the website, nowhere else to point -> Needs Review
+  add_contact        website names an administrator the account has no contact for -> create
+  replace_admin      account's active Administrator differs from the website -> create new, retire old
+  fix_contact        a contact with the administrator's name exists but is inactive / wrong title
+  move_contact       an active contact is stranded on a retired duplicate record -> re-point it
+Account creations (create_account, chow_new_account) also create the Administrator contact.
 """
 import hashlib
 import json
@@ -158,6 +163,83 @@ def new_account_body(loc: Location, parent_id: str, note: str) -> Dict:
     }
 
 
+def norm_person(s: str) -> str:
+    return " ".join((s or "").lower().replace(".", "").split())
+
+
+def admin_contact_action(loc: Location, account_ref: str) -> Dict:
+    """Action that creates the website-listed administrator as a contact on account_ref
+    (an account_id, or "$created" for an account made earlier in the same proposal)."""
+    return {"op": "create_contact", "body": {"name": loc.administrator, "title": "Administrator",
+                                             "account_id": account_ref, "email": "", "phone": ""}}
+
+
+def contact_brief(c: Dict) -> Dict:
+    return {k: c.get(k) for k in ("contact_id", "name", "title", "email", "phone", "is_active", "account_id")}
+
+
+def contact_proposals(loc: Location, acct: Dict, contacts: List[Dict], today: str) -> List["Proposal"]:
+    """Sync the website's administrator onto a matched account's contacts."""
+    out: List[Proposal] = []
+    if not loc.administrator:
+        return out
+    want = norm_person(loc.administrator)
+    same = [c for c in contacts if norm_person(c["name"]) == want]
+    active_admins = [c for c in contacts if c["is_active"] and c["title"] == "Administrator"]
+    ev = {"location": loc.to_dict(), "matched_account": account_brief(acct),
+          "site_administrator": loc.administrator, "crm_contacts": [contact_brief(c) for c in contacts]}
+    if same:
+        c = same[0]
+        body = {}
+        if not c["is_active"]:
+            body["is_active"] = True
+        if c["title"] != "Administrator":
+            body["title"] = "Administrator"
+        if body:
+            out.append(Proposal(
+                kind="fix_contact", subject=acct["account_id"],
+                title=f"Fix contact: {c['name']} at {acct['name']}",
+                summary=(f"Website lists {loc.administrator} as Administrator; CRM has them as "
+                         f"'{c['title']}'{'' if c['is_active'] else ' (inactive)'}."),
+                confidence="high",
+                actions=[{"op": "patch_contact", "contact_id": c["contact_id"], "body": body,
+                          "preconditions": {"account_id": acct["account_id"]}}],
+                evidence={**ev, "contact": contact_brief(c), "reasons": ["Name matches the website administrator."]},
+                key={"contact": c["contact_id"], **body},
+            ).finalize())
+        return out
+    stale = [c for c in active_admins]
+    actions = [admin_contact_action(loc, acct["account_id"])]
+    for c in stale:
+        actions.append({"op": "patch_contact", "contact_id": c["contact_id"], "body": {"is_active": False},
+                        "preconditions": {"account_id": acct["account_id"], "is_active": True}})
+    if stale:
+        out.append(Proposal(
+            kind="replace_admin", subject=acct["account_id"],
+            title=f"Administrator changed: {acct['name']}",
+            summary=(f"Website lists {loc.administrator} as Administrator; CRM has "
+                     + ", ".join(c["name"] for c in stale) + ". Create the new contact and mark the old one inactive."),
+            confidence="medium",
+            actions=actions,
+            evidence={**ev, "reasons": ["Website administrator differs from the CRM's active Administrator contact.",
+                                        "Old contact is deactivated, not deleted, so history and email stay visible.",
+                                        "No email is invented for the new contact; the facility phone is on the account."]},
+            key={"admin": loc.administrator, "retire": sorted(c["contact_id"] for c in stale)},
+        ).finalize())
+    else:
+        out.append(Proposal(
+            kind="add_contact", subject=acct["account_id"],
+            title=f"Add administrator: {loc.administrator} at {acct['name']}",
+            summary=f"Website lists {loc.administrator} as Administrator; the account has no contact by that name.",
+            confidence="high",
+            actions=actions,
+            evidence={**ev, "reasons": ["Account has no active Administrator contact." if not active_admins
+                                        else "No contact with this name on the account."]},
+            key={"admin": loc.administrator},
+        ).finalize())
+    return out
+
+
 def offerings_note(loc: Location) -> str:
     return "Care offerings per website: " + ", ".join(loc.care_offerings) if loc.care_offerings else ""
 
@@ -223,12 +305,16 @@ def build_proposals(locations: List[Location], accounts: List[Dict], contacts: L
                                "so they are treated as different buildings (see related records).")
             if "homepage" in loc.sources and not any(s.startswith("directory") for s in loc.sources):
                 reasons.append("This community is linked only from the homepage (not yet in the directory).")
+            create_actions = [{"op": "create", "body": body}]
+            if loc.administrator:
+                create_actions.append(admin_contact_action(loc, "$created"))
             proposals.append(Proposal(
                 kind="create_account", subject=f"site:{loc.slug}",
                 title=f"Create account: {loc.name}",
-                summary=f"Create '{loc.name}' ({loc.city}, {loc.state}) under {config.PARENT_ACCOUNT_NAME}.",
+                summary=(f"Create '{loc.name}' ({loc.city}, {loc.state}) under {config.PARENT_ACCOUNT_NAME}"
+                         + (f" with administrator contact {loc.administrator}." if loc.administrator else ".")),
                 confidence="high" if not related else "medium",
-                actions=[{"op": "create", "body": body}],
+                actions=create_actions,
                 evidence={**loc_ev, "related_records": related, "reasons": reasons},
                 key={"name": loc.name, "street": loc.street, "zip": loc.zip},
             ).finalize())
@@ -303,6 +389,7 @@ def build_proposals(locations: List[Location], accounts: List[Dict], contacts: L
                 confidence="high",
                 actions=[
                     {"op": "create", "body": body},
+                    *([admin_contact_action(loc, "$created")] if loc.administrator else []),
                     {"op": "patch", "account_id": surv["account_id"],
                      "body": {"chow_current_account": "$created"},
                      "append_note": f"{config.NOTE_TAG} {today}: ownership changed to Bellhaven Senior Living; "
@@ -414,6 +501,38 @@ def build_proposals(locations: List[Location], accounts: List[Dict], contacts: L
                           "append_note": f"{config.NOTE_TAG} {today}: listed on website {loc.url}; set Active."}],
                 evidence={**surv_ev, "reasons": ["Listed on the website."]},
                 key={"status": "Active"},
+            ).finalize())
+
+        proposals.extend(contact_proposals(loc, surv, contacts_by_acct.get(surv["account_id"], []), today))
+
+    # ---- pass 1b: active contacts stranded on retired duplicate records -> move to the survivor
+    for a in accounts:
+        if not (a["status"] == "Inactive" and a["duplicate_of_account"]):
+            continue
+        surv, hops = by_id.get(a["duplicate_of_account"]), 0
+        while surv and surv["duplicate_of_account"] and hops < 5:
+            surv, hops = by_id.get(surv["duplicate_of_account"]), hops + 1
+        if not surv or surv["parent_id"] != parent_id or surv["status"] != "Active":
+            continue
+        surv_contacts = contacts_by_acct.get(surv["account_id"], [])
+        for c in contacts_by_acct.get(a["account_id"], []):
+            if not c["is_active"]:
+                continue
+            already = any(norm_person(x["name"]) == norm_person(c["name"]) for x in surv_contacts)
+            proposals.append(Proposal(
+                kind="move_contact", subject=surv["account_id"],
+                title=f"Move contact: {c['name']} ({c['title']}) -> {surv['name']}",
+                summary=(f"'{c['name']}' is an active contact on retired duplicate '{a['name']}' [{a['account_id']}]. "
+                         + ("A contact with the same name already exists on the survivor, so deactivate this one."
+                            if already else f"Re-point it to the surviving account {surv['account_id']}.")),
+                confidence="high",
+                actions=[{"op": "patch_contact", "contact_id": c["contact_id"],
+                          "body": ({"is_active": False} if already else {"account_id": surv["account_id"]}),
+                          "preconditions": {"account_id": a["account_id"], "is_active": True}}],
+                evidence={"retired_record": account_brief(a), "surviving_record": account_brief(surv),
+                          "contact": contact_brief(c), "crm_contacts": [contact_brief(x) for x in surv_contacts],
+                          "reasons": ["Contacts on an Inactive duplicate are invisible to reps working the survivor."]},
+                key={"contact": c["contact_id"], "to": surv["account_id"], "dedupe": already},
             ).finalize())
 
     # ---- pass 2: Bellhaven-parented records that are not on the website

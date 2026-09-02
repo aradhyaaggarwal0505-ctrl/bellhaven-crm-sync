@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 logs/
 data/*.json
+state/last_run.json

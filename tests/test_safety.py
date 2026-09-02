@@ -117,3 +117,58 @@ class StoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContactTests(unittest.TestCase):
+    today = date.today().isoformat()
+
+    def contact(self, **kw):
+        c = {"contact_id": "C1", "account_id": "A1", "name": "Nadia Duval", "title": "Administrator",
+             "email": "", "phone": "", "is_active": True}
+        c.update(kw)
+        return c
+
+    def test_matching_administrator_proposes_nothing(self):
+        props, _ = build_proposals([loc(administrator="Nadia Duval")], [PARENT, acct()], [self.contact()], self.today)
+        self.assertEqual(sorted(p.kind for p in props), [])
+
+    def test_missing_administrator_is_added(self):
+        props, _ = build_proposals([loc(administrator="Tom Trent")], [PARENT, acct()], [], self.today)
+        self.assertEqual([p.kind for p in props], ["add_contact"])
+        self.assertEqual(props[0].actions[0]["body"]["name"], "Tom Trent")
+        self.assertEqual(props[0].actions[0]["body"]["account_id"], "A1")
+
+    def test_changed_administrator_replaces_and_retires(self):
+        props, _ = build_proposals([loc(administrator="Tom Trent")], [PARENT, acct()], [self.contact()], self.today)
+        self.assertEqual([p.kind for p in props], ["replace_admin"])
+        ops = [(a["op"], a.get("body")) for a in props[0].actions]
+        self.assertEqual(ops[0][0], "create_contact")
+        self.assertEqual(ops[1], ("patch_contact", {"is_active": False}))
+
+    def test_inactive_same_name_is_reactivated_not_duplicated(self):
+        props, _ = build_proposals([loc(administrator="Nadia Duval")], [PARENT, acct()],
+                                   [self.contact(is_active=False, title="Director of Nursing")], self.today)
+        self.assertEqual([p.kind for p in props], ["fix_contact"])
+        self.assertEqual(props[0].actions[0]["body"], {"is_active": True, "title": "Administrator"})
+
+    def test_created_account_gets_administrator_contact(self):
+        props, _ = build_proposals([loc(administrator="Ken Ashby")], [PARENT], [], self.today)
+        self.assertEqual([p.kind for p in props], ["create_account"])
+        self.assertEqual([a["op"] for a in props[0].actions], ["create", "create_contact"])
+        self.assertEqual(props[0].actions[1]["body"]["account_id"], "$created")
+
+    def test_stranded_contact_on_duplicate_is_moved(self):
+        dup = acct(account_id="A2", status="Inactive", duplicate_of_account="A1")
+        stranded = self.contact(contact_id="C9", account_id="A2", name="Tricia Lindqvist", title="Admissions Director")
+        props, _ = build_proposals([loc(administrator="Nadia Duval")], [PARENT, acct(), dup],
+                                   [self.contact(), stranded], self.today)
+        self.assertEqual([p.kind for p in props], ["move_contact"])
+        self.assertEqual(props[0].actions[0]["body"], {"account_id": "A1"})
+
+    def test_apply_create_contact_uses_created_account(self):
+        crm = FakeCRM([PARENT])
+        crm.create_contact = lambda body: (crm.writes.append(("create_contact", body)) or {"contact_id": "C1"})
+        res = apply_actions(crm, [{"op": "create", "body": {"name": "New"}},
+                                  {"op": "create_contact", "body": {"name": "Ken Ashby", "title": "Administrator", "account_id": "$created"}}])
+        self.assertEqual(crm.writes[1][1]["account_id"], "NEW1")
+        self.assertEqual(res["log"][1]["contact_id"], "C1")
