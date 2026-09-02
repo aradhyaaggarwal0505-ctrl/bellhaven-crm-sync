@@ -66,7 +66,7 @@ def run(dry_run: bool = False, verbose: bool = True) -> dict:
     run_id = store.start_run()
     counts = store.upsert_proposals(proposals, run_id)
     summary = {**report, "queue": counts, "date": today, "totals": store.counts(),
-               "new_titles": [p.title for p in proposals if store.get(p.fingerprint)["first_seen"] == store.get(p.fingerprint)["last_seen"]]}
+               "new_titles": [p.title for p in proposals if store.get(p.fingerprint)["status"] == "pending"]}
     store.finish_run(run_id, summary)
     (config.STATE_DB.parent / "last_run.json").write_text(json.dumps(summary, indent=1))
     notify(summary)
@@ -80,7 +80,8 @@ def notify(summary: dict) -> None:
     """Optional: POST a Slack-compatible message when the run queued something new.
     Set NOTIFY_WEBHOOK_URL (Slack incoming webhook or any endpoint accepting {"text": ...})."""
     url = os.environ.get("NOTIFY_WEBHOOK_URL")
-    new = summary.get("queue", {}).get("new", 0)
+    q = summary.get("queue", {})
+    new = q.get("new", 0) + q.get("reopened", 0) + q.get("revived", 0)
     if not url or not new:
         return
     pending = summary.get("totals", {}).get("pending", 0)

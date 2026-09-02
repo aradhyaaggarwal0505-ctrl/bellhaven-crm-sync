@@ -172,3 +172,30 @@ class ContactTests(unittest.TestCase):
                                   {"op": "create_contact", "body": {"name": "Ken Ashby", "title": "Administrator", "account_id": "$created"}}])
         self.assertEqual(crm.writes[1][1]["account_id"], "NEW1")
         self.assertEqual(res["log"][1]["contact_id"], "C1")
+
+
+class DriftTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.store = Store(self.tmp.name)
+
+    def tearDown(self):
+        os.unlink(self.tmp.name)
+
+    def test_applied_then_drift_reopens_but_rejected_stays_rejected(self):
+        a = acct(parent_id="X", parent_name="Other (Parent Account)")
+        props, _ = build_proposals([loc()], [PARENT, a], [], date.today().isoformat())
+        fp = props[0].fingerprint
+        self.store.upsert_proposals(props, 1)
+        self.store.set_status(fp, "applied", result={"ok": True})
+        c = self.store.upsert_proposals(props, 2)          # same diff is back
+        self.assertEqual(c["reopened"], 1)
+        row = self.store.get(fp)
+        self.assertEqual(row["status"], "pending")
+        self.assertEqual(row["reopened"], 1)
+        self.assertIn("history", row["evidence"])
+        self.store.set_status(fp, "rejected")
+        c = self.store.upsert_proposals(props, 3)
+        self.assertEqual((c["reopened"], c["already_decided"]), (0, 1))
+        self.assertEqual(self.store.get(fp)["status"], "rejected")

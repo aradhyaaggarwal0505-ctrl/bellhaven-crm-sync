@@ -6,7 +6,10 @@ from typing import Dict, List, Optional
 
 from . import config
 
-DECIDED = ("approved", "applied", "rejected", "failed")
+# A rejection is a standing human decision: never ask again. An *applied* proposal that is
+# generated again means the CRM drifted back (someone re-broke the field), so it re-opens.
+PERMANENT = ("rejected",)
+REOPENABLE = ("applied", "failed")
 
 
 def now() -> str:
@@ -28,7 +31,8 @@ class Store:
             actions TEXT NOT NULL, evidence TEXT NOT NULL, key TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             first_seen TEXT, last_seen TEXT, run_id INTEGER,
-            decided_at TEXT, decided_by TEXT, applied_at TEXT, result TEXT
+            decided_at TEXT, decided_by TEXT, applied_at TEXT, result TEXT,
+            reopened INTEGER NOT NULL DEFAULT 0, prev_result TEXT
         );
         CREATE TABLE IF NOT EXISTS runs (
             run_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,6 +43,10 @@ class Store:
             ts TEXT, fingerprint TEXT, action TEXT, detail TEXT
         );
         """)
+        self.db.commit()
+        for col, ddl in (("reopened", "INTEGER NOT NULL DEFAULT 0"), ("prev_result", "TEXT")):
+            if col not in [r[1] for r in self.db.execute("PRAGMA table_info(proposals)")]:
+                self.db.execute(f"ALTER TABLE proposals ADD COLUMN {col} {ddl}")
         self.db.commit()
 
     # ---- runs
@@ -56,10 +64,11 @@ class Store:
 
     # ---- proposals
     def upsert_proposals(self, proposals, run_id: int) -> Dict:
-        """Insert new proposals as pending; refresh evidence on still-pending ones; never touch
-        decided ones; mark pending ones that did not reappear as stale."""
+        """Insert new proposals as pending; refresh evidence on still-pending ones; never re-ask
+        about rejected ones; re-open applied/failed ones that come back (drift); mark pending
+        ones that did not reappear as stale."""
         seen = set()
-        counts = {"new": 0, "still_pending": 0, "already_decided": 0, "stale": 0, "revived": 0}
+        counts = {"new": 0, "still_pending": 0, "already_decided": 0, "stale": 0, "revived": 0, "reopened": 0}
         ts = now()
         for p in proposals:
             seen.add(p.fingerprint)
@@ -71,9 +80,23 @@ class Store:
                     (p.fingerprint, p.kind, p.subject, p.title, p.summary, p.confidence,
                      json.dumps(p.actions), json.dumps(p.evidence), json.dumps(p.key), ts, ts, run_id))
                 counts["new"] += 1
-            elif row["status"] in DECIDED:
+            elif row["status"] in PERMANENT:
                 counts["already_decided"] += 1
                 self.db.execute("UPDATE proposals SET last_seen=? WHERE fingerprint=?", (ts, p.fingerprint))
+            elif row["status"] in REOPENABLE or row["status"] == "approved":
+                counts["reopened"] += 1
+                prev = self.db.execute("SELECT status, applied_at, result FROM proposals WHERE fingerprint=?",
+                                       (p.fingerprint,)).fetchone()
+                p.evidence = {**p.evidence, "history": f"Previously {prev['status']} at {prev['applied_at'] or '?'}; "
+                                                       f"the same difference is back in the CRM, so it is proposed again."}
+                self.db.execute(
+                    "UPDATE proposals SET title=?,summary=?,confidence=?,actions=?,evidence=?,status='pending',"
+                    "last_seen=?,run_id=?,reopened=reopened+1,prev_result=result,result=NULL,decided_at=NULL,"
+                    "decided_by=NULL,applied_at=NULL WHERE fingerprint=?",
+                    (p.title, p.summary, p.confidence, json.dumps(p.actions), json.dumps(p.evidence), ts, run_id,
+                     p.fingerprint))
+                self.db.execute("INSERT INTO audit (ts,fingerprint,action,detail) VALUES (?,?,?,?)",
+                                (ts, p.fingerprint, "reopened", prev["result"]))
             else:  # pending or stale -> refresh and (re)activate
                 if row["status"] == "stale":
                     counts["revived"] += 1

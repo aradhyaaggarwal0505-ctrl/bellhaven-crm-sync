@@ -112,9 +112,13 @@ at the same address, so it kept its parent and status and only gained the CHOW p
 ## Safe re-runs
 
 Each proposal has a fingerprint = hash(kind, subject, target values), deliberately
-*excluding* dates and note text. The store never re-inserts a fingerprint that is
-`approved / applied / rejected / failed`; pending ones are refreshed in place; pending ones
-that stop being generated are marked `stale` (and revived if they come back). On top of
+*excluding* dates and note text. A **rejected** fingerprint is a standing human decision and
+is never asked again. Pending ones are refreshed in place; pending ones that stop being
+generated are marked `stale` (and revived if they come back). An **applied** proposal that
+is generated again can only mean the CRM drifted back (someone re-broke the field), so it
+re-opens as pending with a "Drift" banner showing when it was last applied. This was caught
+by a smoke test: break a phone number after the fix had been applied, and the first version
+never re-proposed it. On top of
 that, the matcher only proposes changes for differences that still exist in the live CRM,
 and it skips records that are already merged (`Inactive` + `duplicate_of_account`) or
 CHOW'd (`chow_current_account` set). Running the pipeline right after the review produced

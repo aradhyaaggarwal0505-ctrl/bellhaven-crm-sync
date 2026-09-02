@@ -142,6 +142,7 @@ PAGE = r"""
  {% if ev.crm_contacts is defined %}<table class="cmp" style="width:auto"><tr><th>CRM contacts on {{'survivor' if ev.retired_record else 'account'}}</th><th>title</th><th>email</th><th>active</th></tr>
   {% for c in ev.crm_contacts %}<tr><td>{{c.name}}</td><td>{{c.title}}</td><td>{{c.email or ''}}</td><td>{{'yes' if c.is_active else 'no'}}</td></tr>{% else %}<tr><td colspan="4" class="muted">none</td></tr>{% endfor %}</table>{% endif %}
  {% if ev.website_check %}<div class="kv">{{ev.website_check}}</div>{% endif %}
+ {% if ev.history %}<div class="flash" style="margin:8px 0">Drift: {{ev.history}}{% if p.reopened %} (re-opened {{p.reopened}}x){% endif %}</div>{% endif %}
  {% if ev.breakdown %}<div class="muted">match score {{ev.score}} · {% for k,v in ev.breakdown.items() %}{{k}}={{v}} {% endfor %}</div>{% endif %}
  <details><summary>API actions that will run on approval</summary><pre>{{p.actions|tojson(indent=1)}}</pre></details>
  {% if p.result %}<div class="result {{'' if p.result.ok else 'err'}}">{% if p.result.ok %}Applied.{% if p.result.created_account_id %} Created account <a class="acct" href="{{crm_ui}}/{{p.result.created_account_id}}" target="_blank">{{p.result.created_account_id}}</a>.{% endif %}{% for l in p.result.log %}{% if l.op=='create_contact' %} Created contact {{l.name}} ({{l.contact_id}}).{% endif %}{% endfor %}{% else %}{{p.result.error}}{% endif %}</div>{% endif %}
